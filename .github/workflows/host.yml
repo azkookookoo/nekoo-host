@@ -33,23 +33,18 @@ jobs:
           set +e
           mkdir -p temp_uploads
           echo "Restoring database from backups..."
-          
-          # List of ALL repos to try (distributed backup)
           BACKUP_REPOS=" azkookookoo/nekoo-host nopainnotraind/nekoo-host xToWBs/nekoo-host cowgirlsz/nekoo-host vvvcertambos/nekoo-host DaryoshKhiyam/nekoo-host avimf2005/nekoo-host avi8427/nekoo-host annarajak01/nekoo-host rajaksuhani09/nekoo-host leelavatirajak1/nekoo-host git1one/nekoo-host ballpooltracer/nekoo-host thatwassillybigrob/nekoo-host ankeshsingh77173-wq/nekoo-host baharamad8/nekoo-host dunyatarik628/nekoo-host faceofgits/nekoo-host maxytmaxyt1212-boop/nekoo-host akashseh261-alt/nekoo-host nyt44040-stack/nekoo-host pandeysangeeta1981-dev/nekoo-host manas807897-ui/nekoo-host sahilrajak2411-afk/nekoo-host sahilrajak1107-hash/nekoo-host sakesh277/nekoo-host"
-          
           DB_RESTORED=false
-          
           for REPO in $BACKUP_REPOS; do
             if [ "$DB_RESTORED" = true ]; then break; fi
-            
             echo "  Trying $REPO..."
-            RELEASE_JSON=$(curl -s -H "Authorization: token $GH_TOKEN"               "https://api.github.com/repos/$REPO/releases/tags/db-backup" 2>/dev/null)
-            
+            RELEASE_JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/releases/tags/db-backup" 2>/dev/null)
             DOWNLOAD_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[]? | select(.name == "nekoo.db") | .url' 2>/dev/null || echo "")
-            
             if [ "$DOWNLOAD_URL" != "" ] && [ "$DOWNLOAD_URL" != "null" ]; then
-              curl -s -L -H "Authorization: token $GH_TOKEN"                 -H "Accept: application/octet-stream"                 "$DOWNLOAD_URL" -o nekoo.db.tmp 2>/dev/null
-              
+              curl -s -L -H "Authorization: token $GH_TOKEN" \
+                -H "Accept: application/octet-stream" \
+                "$DOWNLOAD_URL" -o nekoo.db.tmp 2>/dev/null
               TMP_SIZE=$(stat -c%s nekoo.db.tmp 2>/dev/null || echo "0")
               if [ "$TMP_SIZE" -gt 100 ]; then
                 mv nekoo.db.tmp nekoo.db
@@ -60,9 +55,8 @@ jobs:
               fi
             fi
           done
-          
           if [ "$DB_RESTORED" = false ]; then
-            echo "⚠️ No backup found anywhere, starting fresh"
+            echo "⚠️ No backup found, starting fresh"
             touch nekoo.db
           fi
           set -e
@@ -79,11 +73,9 @@ jobs:
           TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          # Download cloudflared
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
           chmod +x cloudflared-linux-amd64
 
-          # Start Nekoo
           source $HOME/.cargo/env
           nohup ./target/release/nekoo > nekoo.log 2>&1 &
           NEKOO_PID=$!
@@ -98,7 +90,6 @@ jobs:
           curl -s http://localhost:3000/health || echo "Health check pending"
           head -20 nekoo.log
 
-          # Start Cloudflare Tunnel
           nohup ./cloudflared-linux-amd64 tunnel --no-autoupdate run --token $TUNNEL_TOKEN > tunnel.log 2>&1 &
           TUNNEL_PID=$!
           echo "✅ Tunnel started (PID: $TUNNEL_PID)"
@@ -107,23 +98,35 @@ jobs:
 
           # Create backup release if needed
           REPO_FULL="${{ github.repository }}"
-          curl -s -H "Authorization: token $GH_TOKEN"             "https://api.github.com/repos/$REPO_FULL/releases/tags/db-backup" | jq -r '.id' | grep -q null &&           curl -s -X POST -H "Authorization: token $GH_TOKEN"             -H "Content-Type: application/json"             "https://api.github.com/repos/$REPO_FULL/releases"             -d '{"tag_name":"db-backup","name":"Database Backup","body":"Auto-managed DB backup","prerelease":true}' || true
+          EXISTING=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO_FULL/releases/tags/db-backup" | jq -r '.id // empty')
+          if [ -z "$EXISTING" ]; then
+            curl -s -X POST -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/$REPO_FULL/releases" \
+              -d '{"tag_name":"db-backup","name":"Database Backup","body":"Auto-managed DB backup","prerelease":true}' || true
+          fi
 
-          # Backup function - saves to OWN repo
           backup_db() {
             local REPO_FULL="${{ github.repository }}"
-            local RELEASE_ID=$(curl -s -H "Authorization: token $GH_TOKEN"               "https://api.github.com/repos/$REPO_FULL/releases/tags/db-backup" | jq -r '.id')
-            if [ "$RELEASE_ID" != "null" ] && [ "$RELEASE_ID" != "" ]; then
-              local OLD_ASSET=$(curl -s -H "Authorization: token $GH_TOKEN"                 "https://api.github.com/repos/$REPO_FULL/releases/$RELEASE_ID/assets"                 | jq -r '.[] | select(.name == "nekoo.db") | .id')
-              if [ "$OLD_ASSET" != "" ] && [ "$OLD_ASSET" != "null" ]; then
-                curl -s -X DELETE -H "Authorization: token $GH_TOKEN"                   "https://api.github.com/repos/$REPO_FULL/releases/assets/$OLD_ASSET"
+            local RELEASE_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO_FULL/releases/tags/db-backup" | jq -r '.id // empty')
+            if [ -n "$RELEASE_ID" ]; then
+              local OLD_ASSET=$(curl -s -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/$REPO_FULL/releases/$RELEASE_ID/assets" \
+                | jq -r '.[]? | select(.name == "nekoo.db") | .id' 2>/dev/null || echo "")
+              if [ -n "$OLD_ASSET" ]; then
+                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/$REPO_FULL/releases/assets/$OLD_ASSET" || true
               fi
-              curl -s -X POST -H "Authorization: token $GH_TOKEN"                 -H "Content-Type: application/octet-stream"                 "https://uploads.github.com/repos/$REPO_FULL/releases/$RELEASE_ID/assets?name=nekoo.db"                 --data-binary @nekoo.db > /dev/null
+              curl -s -X POST -H "Authorization: token $GH_TOKEN" \
+                -H "Content-Type: application/octet-stream" \
+                "https://uploads.github.com/repos/$REPO_FULL/releases/$RELEASE_ID/assets?name=nekoo.db" \
+                --data-binary @nekoo.db > /dev/null
               echo "[$(date)] ✅ DB backed up to $REPO_FULL"
             fi
           }
 
-          # Monitoring loop
           echo "Starting monitoring..."
           BACKUP_COUNTER=0
           for i in {1..340}; do
